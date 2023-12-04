@@ -1,43 +1,84 @@
-pipeline{
-    agent{
-        node{
-            label '<your_stdID>'
+pipeline {
+    agent {
+        node {
+            label '410977008'
         }
     }
-    options{
-        skipDefaultCheckout(true) //如有過去專案，清除
+    options {
+        skipDefaultCheckout(true)
     }
-
-    stages{
-        stage('Clean old DOCs & Checkout SCM'){
-            cleanWs() //清除舊連線
-            checkout scm //連線 source code management(Github)
+    stages {
+        stage('Clean old DOCs & checkout SCM') {
+            steps {
+                cleanWs()
+                checkout scm
+            }
         }
-        stage('<stage_name>'){
-            steps{
+        stage('verify tools') {
+            steps {
                 sh '''
-                 ///把你的指令放在這
+                docker info
+                docker version
+                docker-compose version
+                '''
+            } 
+        }
+        stage('Start Container') {
+            steps {
+                sh '''
+                docker-compose up -d
                 '''
             }
         }
-        .
-        .
-        .
-        *** 注意 stage database seed ***
-        stage('Database seed'){
-            steps{
+        stage('Dependency installation') {
+            steps {
                 sh '''
-                sleep 2 //讓工作喘一下， mysql 建立資料庫需要一點點的時間
-                .
-                .
-                .
+                docker-compose exec -T ci4_service sh -c "cd /app && composer install"
+                docker-compose restart
                 '''
             }
         }
+        stage('Environment Setting Up') {
+            steps {
+                script {
+                    sh '''
+                    cp app/env app/.env
+                    '''
+                }
+            }
+        }
+        stage('Database migrate') {
+            steps {
+                sh '''
+                docker-compose exec -T ci4_service sh -c "php spark migrate"
+                '''
+            }
+        }
+        stage('Database seed') {
+            steps {
+                sh '''
+                sleep 2 
+                docker-compose exec -T ci4_service sh -c "php spark migrate"
+                docker-compose exec -T ci4_service sh -c "php spark db:seed Members"
+                docker-compose exec -T ci4_service sh -c "php spark db:seed TodoLists"
+                docker-compose up -d
+                '''
+            }
+        }
+        stage('Unit testing') {
+            steps {
+                sh '''
+                docker-compose exec -T ci4_service sh -c "vendor/bin/phpunit --log-junit build/logs/blogger_unitTest.xml"
+                ls
+                '''
+                junit 'app/build/logs/blogger_unitTest.xml'
+            }
+        }
     }
-    post{ //pipeline 工作完成後的清理工作
-        always{
-            sh '''docker-compose down'''
+    post {
+        always {
+            sh 'docker-compose down'
         }
     }
 }
+
